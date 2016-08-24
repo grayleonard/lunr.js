@@ -10,7 +10,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/olivernn/lunr.js.git"
+    "url": "https://github.com/grayleonard/lunr.js.git"
   },
   "devDependencies": {
     "dox": "0.4.4",
