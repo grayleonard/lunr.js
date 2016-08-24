@@ -1184,6 +1184,7 @@ lunr.Index.prototype.idf = function (term) {
  * @memberOf Index
  */
 lunr.Index.prototype.search = function (query) {
+	console.log('got here');
   var queryTokens = this.pipeline.run(this.tokenizerFn(query)),
       queryVector = new lunr.Vector,
       documentSets = [],
