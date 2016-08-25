@@ -1,5 +1,5 @@
 /**
- * lunr - http://lunrjs.com - A bit like Solr, but much smaller and not as bright - 0.7.1
+ * lunr - http://lunrjs.com - A bit like Solr, but much smaller and not as bright - 0.7.2
  * Copyright (C) 2016 Oliver Nightingale
  * @license MIT
  */
@@ -55,7 +55,7 @@ var lunr = function (config) {
   return idx
 }
 
-lunr.version = "0.7.1"
+lunr.version = "0.7.2"
 /*!
  * lunr.utils
  * Copyright (C) 2016 Oliver Nightingale
@@ -1159,6 +1159,41 @@ lunr.Index.prototype.idf = function (term) {
   return this._idfCache[cacheKey] = idf
 }
 
+lunr.Index.prototype.int_dist = function (term) {
+	var self = this;
+	var matched = [];
+        var matchingDocuments = new lunr.SortedSet,
+	    maxDist = 1;
+        console.log(self);
+	Object.keys(self.documentStore.store).forEach(function(key) {
+		self.documentStore.store[key].elements.forEach(function(ele) {
+			if(!isNaN(ele)) {
+				if (Math.abs(term - ele) > maxDist) {
+					maxDist = Math.abs(term - ele);
+				}
+			}
+		});
+	});
+	Object.keys(self.documentStore.store).forEach(function(key) {
+		var res = { ref: key, score: 0, term: term };
+		var tmp = 0;
+		var count = 0;
+		self.documentStore.store[key].elements.forEach(function(ele) {
+			if(!isNaN(ele)) {
+				console.log(ele);
+				tmp += 1 - (Math.abs(term - ele) / maxDist);
+				count += 1;
+			}
+		});
+		res.score = tmp / count;
+		if(res.score != 0 && count > 0) {
+			matched.push(res);
+		}
+	});
+	console.log(matched);
+	return matched;
+}
+
 /**
  * Searches the index using the passed query.
  *
@@ -1184,26 +1219,22 @@ lunr.Index.prototype.idf = function (term) {
  * @memberOf Index
  */
 lunr.Index.prototype.search = function (query) {
-	console.log('got here');
+  var self = this;
+  console.log('got here');
   var queryTokens = this.pipeline.run(this.tokenizerFn(query)),
       queryVector = new lunr.Vector,
+      numericDocuments = {},
       documentSets = [],
-      fieldBoosts = this._fields.reduce(function (memo, f) { return memo + f.boost }, 0)
-
-  var hasSomeToken = queryTokens.some(function (token) {
-    return this.tokenStore.has(token)
-  }, this)
-
-  if (!hasSomeToken) return []
-
+      fieldBoosts = this._fields.reduce(function (memo, f) { return memo + f.boost }, 0),
+      numeric_res = []
 
   queryTokens
     .forEach(function (token, i, tokens) {
-      if(!isNaN(token)) { // if token is numeric:
         console.log(token);
+      if(!isNaN(token)) { // if token is numeric:
+	numeric_res = self.int_dist(token);
       }
-      var tf = 1 / tokens.length * this._fields.length * fieldBoosts,
-          self = this
+      var tf = 1 / tokens.length * this._fields.length * fieldBoosts;
 
       var set = this.tokenStore.expand(token).reduce(function (memo, key) {
         var pos = self.corpusTokens.indexOf(key),
@@ -1222,17 +1253,24 @@ lunr.Index.prototype.search = function (query) {
         // calculate the query tf-idf score for this token
         // applying an similarityBoost to ensure exact matches
         // these rank higher than expanded terms
-        if (pos > -1) queryVector.insert(pos, tf * idf * similarityBoost)
+	if (pos > -1) queryVector.insert(pos, tf * idf * similarityBoost)
 
         // add all the documents that have this key into a set
         // ensuring that the type of key is preserved
-        var matchingDocuments = self.tokenStore.get(key),
-            refs = Object.keys(matchingDocuments),
-            refsLen = refs.length
+	if(numeric_res.length > 0) {
+		numeric_res.forEach(function(item) {
+			numericDocuments[item.ref] = item;
+			set.add(numericDocuments[item.ref].ref)
+		});
+	} else {
+		var matchingDocuments = self.tokenStore.get(key),
+		    refs = Object.keys(matchingDocuments),
+		    refsLen = refs.length
 
-        for (var i = 0; i < refsLen; i++) {
-          set.add(matchingDocuments[refs[i]].ref)
-        }
+		for (var i = 0; i < refsLen; i++) {
+		  set.add(matchingDocuments[refs[i]].ref)
+		}
+	}
 
         return memo.union(set)
       }, new lunr.SortedSet)
@@ -1240,14 +1278,23 @@ lunr.Index.prototype.search = function (query) {
       documentSets.push(set)
     }, this)
 
+  if(documentSets.length < 1) return [];
   var documentSet = documentSets.reduce(function (memo, set) {
     return memo.intersect(set)
   })
 
+  documentSet = documentSet.map(function(ref) {
+	  console.log(this);
+      var similarity = queryVector.similarity(self.documentVector(ref));
+      if(numericDocuments[ref] != undefined) {
+      	var avg = numericDocuments[ref].score + similarity;
+	return { ref: ref, score: avg }
+      }
+      return { ref: ref, score: queryVector.similarity(self.documentVector(ref)) }
+  	
+  });
+
   return documentSet
-    .map(function (ref) {
-      return { ref: ref, score: queryVector.similarity(this.documentVector(ref)) }
-    }, this)
     .sort(function (a, b) {
       return b.score - a.score
     })
@@ -1882,6 +1929,7 @@ lunr.TokenStore.load = function (serialisedData) {
  * @memberOf TokenStore
  */
 lunr.TokenStore.prototype.add = function (token, doc, root) {
+  token = token + "";
   var root = root || this.root,
       key = token.charAt(0),
       rest = token.slice(1)
